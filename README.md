@@ -145,6 +145,27 @@ Observações importantes:
 - Linhas que deram **erro** na rodada anterior também contam como "já processadas" e
   **não** serão refeitas no `--resume`. Para reprocessá-las, filtre-as do JSONL antes.
 
+### Quando os tokens/uso acabam
+
+Se o limite de uso da sua conta (tokens) estourar no meio do lote, o script **detecta**
+a mensagem do `claude`, **interrompe o lote inteiro** e sai com código `2`, imprimindo:
+
+```
+⛔ LIMITE DE USO (TOKENS) ATINGIDO — lote interrompido.
+   ...
+```
+
+As linhas pendentes **não** são gravadas como erro (ao contrário de falhas pontuais),
+justamente para que o `--resume` as repegue. Depois que os tokens resetarem, é só
+**re-rodar o mesmo comando com `--resume`** que ele continua de onde parou:
+
+```bash
+python b2w_pipeline.py reviews.csv corpus.jsonl --resume
+```
+
+> Isso vale para exaustão de cota (que reseta por janela). Picos transitórios de
+> rate-limit numa única chamada continuam tratados como erro daquela linha, sem parar o lote.
+
 ---
 
 ## 6. Formato de entrada (CSV)
@@ -211,6 +232,7 @@ Em caso de falha numa linha específica, em vez de `annotation` a linha terá um
 | `FileNotFoundError: .../claude` | `claude` não está no `PATH` | `export CLAUDE_BIN="$(command -v claude)"` ou ajuste o fallback no script (passo 1). |
 | `SyntaxError` ao iniciar | Python < 3.10 | Use Python 3.10 ou superior. |
 | `json.decoder.JSONDecodeError` numa linha | O modelo devolveu algo fora do JSON | Linha vai para `error`; o lote segue. Reexecute com `--resume`. |
+| `⛔ LIMITE DE USO (TOKENS) ATINGIDO` (saída com código 2) | Cota de uso/tokens da conta esgotada | Espere o reset e **re-rode o mesmo comando com `--resume`**. As pendentes não viram erro, são repegues automaticamente. |
 
 ---
 

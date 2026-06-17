@@ -107,13 +107,21 @@ Responda com este JSON exato (sem nenhum texto fora do JSON):
 }}"""
 
 # ---------------------------------------------------------------------------
-# Chamada ao claude -p via subprocess — mais estável que o SDK para batch
+# Chamada ao claude -p via subprocess
 # ---------------------------------------------------------------------------
 
-# Caminho do executável `claude`. Resolução, em ordem:
-#   1. variável de ambiente CLAUDE_BIN, se definida
-#   2. `claude` encontrado no PATH (autodetecção — funciona na maioria das máquinas)
-#   3. fallback fixo (ajuste se o claude não estiver no PATH)
+class UsageLimitError(RuntimeError):
+    """Tokens/uso da assinatura esgotados — interrompe o lote inteiro."""
+
+_USAGE_LIMIT_PATTERNS = re.compile(
+    r"usage limit|limit reached|limit will reset|reset[s]?\s+at"
+    r"|credit balance|insufficient[_ ]?quota|out of (?:credits|tokens)",
+    re.IGNORECASE,
+)
+
+def _is_usage_limit(text: str) -> bool:
+    return bool(text and _USAGE_LIMIT_PATTERNS.search(text))
+
 CLAUDE_BIN = (
     os.environ.get("CLAUDE_BIN")
     or shutil.which("claude")
@@ -121,26 +129,26 @@ CLAUDE_BIN = (
 )
 
 async def call_claude(prompt: str, model: str) -> str:
-    """Chama claude -p via stdin — mais robusto que passar como argumento."""
     loop = asyncio.get_event_loop()
 
     def _run():
         result = subprocess.run(
-            [CLAUDE_BIN, "-p", "--model", model,
-             "--output-format", "text"],
-            input=prompt,          # prompt via stdin, não como argumento
+            [CLAUDE_BIN, "-p", "--model", model, "--output-format", "text"],
+            input=prompt,
             capture_output=True,
             text=True,
             timeout=90,
         )
         if result.returncode != 0:
-            # claude às vezes escreve o erro (ex.: "Not logged in") em stdout
             err = (result.stderr or "").strip() or (result.stdout or "").strip()
             err = err[:300] if err else "(sem saída)"
-            raise RuntimeError(
-                f"claude -p falhou (código {result.returncode}): {err}"
-            )
-        return result.stdout.strip()
+            if _is_usage_limit(err):
+                raise UsageLimitError(err)
+            raise RuntimeError(f"claude -p falhou (código {result.returncode}): {err}")
+        out = result.stdout.strip()
+        if "{" not in out and _is_usage_limit(out):
+            raise UsageLimitError(out or "(limite de uso atingido)")
+        return out
 
     return await loop.run_in_executor(None, _run)
 
@@ -156,7 +164,7 @@ async def annotate(title: str, text: str, rating: int,
     return json.loads(raw)
 
 # ---------------------------------------------------------------------------
-# Roteador
+# Roteador — grava apenas campos relevantes para o corpus
 # ---------------------------------------------------------------------------
 
 async def route(row: dict) -> dict | None:
@@ -178,13 +186,17 @@ async def route(row: dict) -> dict | None:
 
     try:
         ann = await annotate(title, text, rating, category, model)
+    except UsageLimitError:
+        raise  # propaga para interromper o lote
     except Exception as e:
+        # Erro pontual: grava como needs_review para não perder a linha
         return {
-            "source_row":    row,
-            "error":         str(e),
-            "needs_review":  True,
-            "model":         model,
-            "annotated_at":  datetime.now(timezone.utc).isoformat(),
+            "text":           text,
+            "context":        category,
+            "rating_anchor":  rating,
+            "error":          str(e),
+            "needs_review":   True,
+            "model":          model,
             "prompt_version": PROMPT_VERSION,
         }
 
@@ -192,21 +204,34 @@ async def route(row: dict) -> dict | None:
     if not escalated and ann.get("confianca", 1.0) < 0.55:
         try:
             ann = await annotate(title, text, rating, category, OPUS)
-            model, escalated = OPUS, True
+            model = OPUS
         except Exception:
             pass
 
     return {
-        "source_row":       row,
-        "model":            model,
-        "escalated":        escalated,
-        "complexity_score": score,
-        "signals":          signals,
-        "rating_anchor":    rating,
-        "annotation":       ann,
-        "needs_review":     ann.get("confianca", 0.0) < 0.80,
-        "annotated_at":     datetime.now(timezone.utc).isoformat(),
-        "prompt_version":   PROMPT_VERSION,
+        # Dado linguístico — apenas o corpo da review (o título alimenta
+        # o prompt e a heurística, mas não entra no texto do corpus)
+        "text":              text,
+        "context":           category,
+        "rating_anchor":     rating,
+
+        # Anotação emocional
+        "emocao_primaria":   ann.get("emocao_primaria"),
+        "emocao_secundaria": ann.get("emocao_secundaria"),
+        "valenca":           ann.get("valenca"),
+        "arousal":           ann.get("arousal"),
+        "dominancia":        ann.get("dominancia"),
+        "intensidade":       ann.get("intensidade"),
+        "emocao_mista":      ann.get("emocao_mista"),
+        "intencao":          ann.get("intencao"),
+        "registro":          ann.get("registro"),
+        "confianca":         ann.get("confianca"),
+        "raciocinio":        ann.get("raciocinio"),
+
+        # Rastreabilidade (remover antes do treino)
+        "needs_review":      ann.get("confianca", 0.0) < 0.80,
+        "model":             model,
+        "prompt_version":    PROMPT_VERSION,
     }
 
 # ---------------------------------------------------------------------------
@@ -219,7 +244,7 @@ def load_csv(path: str, limit: int = None) -> list[dict]:
             rows = []
             with open(path, encoding=enc, errors="strict") as f:
                 reader = csv.DictReader(f)
-                for i, row in enumerate(reader):
+                for row in reader:
                     if limit and len(rows) >= limit:
                         break
                     text = str(row.get("review_text", "") or "").strip()
@@ -243,8 +268,8 @@ def load_done_ids(output_path: str) -> set:
     for line in p.read_text(errors="replace").splitlines():
         try:
             obj = json.loads(line)
-            src = obj.get("source_row", {})
-            uid = str(src.get("reviewer_id", "")) + str(src.get("product_id", ""))
+            # Novo formato: usa hash do texto como ID
+            uid = obj.get("text", "")[:120]
             if uid:
                 done.add(uid)
         except Exception:
@@ -261,11 +286,12 @@ async def run(input_path: str, output_path: str,
               concurrency: int = 5) -> None:
 
     rows = load_csv(input_path, limit)
-    done = load_done_ids(output_path) if resume else set()
 
-    if done:
+    # Gera IDs de resumo baseados no texto (já que source_row não é gravado)
+    if resume:
+        done = load_done_ids(output_path)
         rows = [r for r in rows
-                if (str(r.get("reviewer_id","")) + str(r.get("product_id","")))
+                if (str(r.get('review_text', '') or '').strip())[:120]
                 not in done]
         print(f"Restam {len(rows)} para anotar")
 
@@ -274,14 +300,24 @@ async def run(input_path: str, output_path: str,
         return
 
     sem = asyncio.Semaphore(concurrency)
-    counts = {"ok": 0, "err": 0, "opus": 0, "review": 0, "skip": 0}
+    stop = asyncio.Event()
+    counts = {"ok": 0, "err": 0, "opus": 0, "review": 0, "skip": 0, "stopped": 0}
 
     async def bounded(row):
+        if stop.is_set():
+            return "__STOP__"
         async with sem:
-            return await route(row)
+            if stop.is_set():
+                return "__STOP__"
+            try:
+                return await route(row)
+            except UsageLimitError as e:
+                stop.set()
+                return ("__LIMIT__", str(e))
 
     out = open(output_path, "a", encoding="utf-8")
     total = len(rows)
+    limit_msg = None
 
     try:
         tasks = [bounded(r) for r in rows]
@@ -291,8 +327,15 @@ async def run(input_path: str, output_path: str,
             if result is None:
                 counts["skip"] += 1
                 continue
+            if result == "__STOP__":
+                counts["stopped"] += 1
+                continue
+            if isinstance(result, tuple) and result[0] == "__LIMIT__":
+                limit_msg = result[1]
+                counts["stopped"] += 1
+                continue
 
-            if "error" in result:
+            if result.get("error"):
                 counts["err"] += 1
             else:
                 counts["ok"] += 1
@@ -304,8 +347,7 @@ async def run(input_path: str, output_path: str,
             out.write(json.dumps(result, ensure_ascii=False) + "\n")
             out.flush()
 
-            if i % 25 == 0 or i == total:
-                done_n  = counts["ok"] + counts["err"]
+            if (i % 25 == 0 or i == total) and not stop.is_set():
                 sonnet_n = counts["ok"] - counts["opus"]
                 pct = round(i / total * 100)
                 print(
@@ -317,6 +359,17 @@ async def run(input_path: str, output_path: str,
         out.close()
 
     done_n = counts["ok"] + counts["err"]
+
+    if limit_msg is not None:
+        bar = "═" * 55
+        print(f"\n{bar}")
+        print("⛔ LIMITE DE USO ATINGIDO — lote interrompido.")
+        print(f"   Anotados nesta rodada: {done_n}  |  pendentes: {counts['stopped']}")
+        print("   Re-rode com --resume após o reset dos tokens:")
+        print(f"     python b2w_pipeline.py {input_path} {output_path} --resume")
+        print(bar)
+        sys.exit(2)
+
     print(f"\n{'─'*55}")
     print(f"Concluído:       {done_n} anotados, {counts['skip']} pulados")
     print(f"Opus usado:      {counts['opus']} ({round(counts['opus']/max(done_n,1)*100)}%)")

@@ -1,0 +1,29 @@
+Encoding detectado: utf-8 | 520 linhas válidas
+Retomando — 20 exemplos já processados
+Restam 500 para anotar
+[  5%] 25/500 | Sonnet=23 Opus=2 Erros=0 Revisão=3
+[ 10%] 50/500 | Sonnet=48 Opus=2 Erros=0 Revisão=3
+[ 15%] 75/500 | Sonnet=73 Opus=2 Erros=0 Revisão=6
+[ 20%] 100/500 | Sonnet=98 Opus=2 Erros=0 Revisão=10
+[ 25%] 125/500 | Sonnet=123 Opus=2 Erros=0 Revisão=10
+[ 30%] 150/500 | Sonnet=148 Opus=2 Erros=0 Revisão=13
+[ 35%] 175/500 | Sonnet=172 Opus=3 Erros=0 Revisão=15
+[ 40%] 200/500 | Sonnet=197 Opus=3 Erros=0 Revisão=16
+[ 45%] 225/500 | Sonnet=221 Opus=4 Erros=0 Revisão=16
+[ 50%] 250/500 | Sonnet=246 Opus=4 Erros=0 Revisão=17
+[ 55%] 275/500 | Sonnet=270 Opus=5 Erros=0 Revisão=22
+[ 60%] 300/500 | Sonnet=295 Opus=5 Erros=0 Revisão=24
+[ 65%] 325/500 | Sonnet=319 Opus=6 Erros=0 Revisão=25
+[ 70%] 350/500 | Sonnet=343 Opus=7 Erros=0 Revisão=27
+[ 75%] 375/500 | Sonnet=368 Opus=7 Erros=0 Revisão=28
+[ 80%] 400/500 | Sonnet=393 Opus=7 Erros=0 Revisão=32
+[ 85%] 425/500 | Sonnet=417 Opus=8 Erros=0 Revisão=32
+[ 90%] 450/500 | Sonnet=442 Opus=8 Erros=0 Revisão=32
+[ 95%] 475/500 | Sonnet=467 Opus=8 Erros=0 Revisão=35
+[100%] 500/500 | Sonnet=491 Opus=9 Erros=0 Revisão=40
+
+───────────────────────────────────────────────────────
+Concluído:       500 anotados, 0 pulados
+Opus usado:      9 (2%)
+Fila de revisão: 40 (8%)
+Saída:           corpus.jsonl
